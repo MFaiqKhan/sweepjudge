@@ -1,4 +1,4 @@
-# Karma-Based Alignment Sandbox – MVP (Plan B)
+# Karma-Based Alignment Sandbox Multi Modal Research Agent 
 
 ## 1  Project Goal
 A minimal yet functional multi-agent research assistant that showcases emergent cooperation and reputation-driven task allocation. The MVP focuses on a single research theme (Parameter-Efficient Fine-Tuning, **PEFT**) and runs entirely on one machine using an **internal JSON-RPC message schema modelled after Google's A2A protocol**.
@@ -85,23 +85,53 @@ findmyrecruitment/
 ## 6  High-Level Application Flow
 ```mermaid
 flowchart TD
-  U[User CLI / HTTP] --> ORCH[Orchestrator]
+  U["User CLI / HTTP"] --> ORCH["Orchestrator"]
+
   subgraph "Micro-Agent Swarm"
-    F1[Fetcher 1] F2[Fetcher 2] F3[Fetcher 3]
-    R1[Reader 1] R2[Reader 2] R3[Reader 3]
-    M1[Metrician 1] M2[Metrician 2]
-    A1[Analyst 1] A2[Analyst 2]
-    D[Debater (2 personas)]
-    S[Synthesiser]
+    F1["Fetcher 1"]
+    F2["Fetcher 2"]
+    F3["Fetcher 3"]
+    R1["Reader 1"]
+    R2["Reader 2"]
+    R3["Reader 3"]
+    M1["Metrician 1"]
+    M2["Metrician 2"]
+    A1["Analyst 1"]
+    A2["Analyst 2"]
+    D["Debater (2 personas)"]
+    S["Synthesiser"]
   end
-  ORCH -->|task queue| F1 & F2 & F3 & R1 & R2 & R3 & M1 & M2 & A1 & A2 & D
-  F1 & F2 & F3 --> ORCH
-  R1 & R2 & R3 --> ORCH
-  M1 & M2 --> ORCH
-  A1 & A2 --> ORCH
+
+  %% Queue dispatches
+  ORCH -->|"task queue"| F1
+  ORCH -->|"task queue"| F2
+  ORCH -->|"task queue"| F3
+  ORCH -->|"task queue"| R1
+  ORCH -->|"task queue"| R2
+  ORCH -->|"task queue"| R3
+  ORCH -->|"task queue"| M1
+  ORCH -->|"task queue"| M2
+  ORCH -->|"task queue"| A1
+  ORCH -->|"task queue"| A2
+  ORCH -->|"task queue"| D
+
+  %% Agents report back
+  F1 --> ORCH
+  F2 --> ORCH
+  F3 --> ORCH
+  R1 --> ORCH
+  R2 --> ORCH
+  R3 --> ORCH
+  M1 --> ORCH
+  M2 --> ORCH
+  A1 --> ORCH
+  A2 --> ORCH
   D --> ORCH
+
+  %% Final synthesis & response
   ORCH --> S
-  S --> ORCH --> U
+  S --> ORCH
+  ORCH --> U
 ```
 
 ### 6.1  Detailed Agent Sequence (example: `Summarise_Paper`)
@@ -200,19 +230,20 @@ Ensure the karma economy remains dynamic, rewarding active participation and pre
 
 
 -----------------|||||||||------------------
+
 Layman Terms : 
 
 Current karma (today):  
-• Every time an agent finishes a task it directly calls “add karma( ±Δ )” with a hard-coded value (e.g., +3 for a good summary, –1 for an error).  
+• Every time an agent finishes a task it directly calls "add karma( ±Δ )" with a hard-coded value (e.g., +3 for a good summary, –1 for an error).  
 • Those deltas are appended as rows in one Postgres table.  
-• An agent’s reputation score is simply SUM( delta ).  
+• An agent's reputation score is simply SUM( delta ).  
 • When the scheduler must pick a worker, it just chooses the candidate with the largest sum.  
 In short: one global score, fixed rewards, no penalties for slowness or waste, no specialization, no decay, no peer feedback—just a straightforward leaderboard.
 
 Next-planned karma (deep economy):  
 • Dynamic rewards: Δ = (Base reward × quality score) – (time & resource penalties). A ReviewerAgent supplies the quality score.  
-• Scoped reputation: agents hold separate karma balances per topic or skill tag (e.g., “#peft”, “#summarization”) in addition to their global total. Scheduler matches tasks to the highest karma in the relevant scope, not just the overall leader.  
-• Peer review & staking: agents can up-/down-vote the previous agent’s output and must stake a portion of their own karma before accepting high-value tasks; failure burns the stake.  
+• Scoped reputation: agents hold separate karma balances per topic or skill tag (e.g., "#peft", "#summarization") in addition to their global total. Scheduler matches tasks to the highest karma in the relevant scope, not just the overall leader.  
+• Peer review & staking: agents can up-/down-vote the previous agent's output and must stake a portion of their own karma before accepting high-value tasks; failure burns the stake.  
 • Temporal dynamics: karma decays slowly every day, and scores for new agents change more dramatically (high volatility) so newcomers can rise fast.  
 Together these additions turn the leaderboard into a living trust economy where quality, efficiency, specialization, community validation, and continued participation all shape which agent gets the next job.
 
