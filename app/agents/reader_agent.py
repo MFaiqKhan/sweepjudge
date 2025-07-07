@@ -11,6 +11,7 @@ Emits karma, Extract_Metrics task, and stores summary as artifact.
 from __future__ import annotations
 
 import logging
+import os
 from pathlib import Path
 from typing import Any, List
 
@@ -24,7 +25,12 @@ from .base import BaseAgent
 
 logger = logging.getLogger(__name__)
 
-MODEL = "gpt-4o-mini"
+# Previously used direct OpenAI model – now replaced by OpenRouter
+# MODEL = "gpt-4o-mini"
+
+# OpenRouter configuration
+OPENROUTER_BASE_URL = "https://openrouter.ai/api/v1"
+MODEL = "openrouter/cypher-alpha:free"
 
 SUMMARY_PROMPT = (
     "You are an expert ML researcher. Summarise the following paper section in 5\n"
@@ -60,7 +66,10 @@ class ReaderAgent(BaseAgent):
             await self._emit_karma(self.agent_id, -1, reason="empty-pdf")
             return
 
-        client = openai.AsyncOpenAI()
+        client = openai.AsyncOpenAI(
+            api_key=os.getenv("OPENROUTER_API_KEY"),
+            base_url=OPENROUTER_BASE_URL,
+        )
         summaries: List[str] = []
         for chunk in chunk_text(text):
             try:

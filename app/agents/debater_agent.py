@@ -10,6 +10,7 @@ prompts (optimist vs skeptic) then merges outputs.
 from __future__ import annotations
 
 import logging
+import os
 from typing import Any, Dict, List
 
 import openai
@@ -20,7 +21,9 @@ from .base import BaseAgent
 
 logger = logging.getLogger(__name__)
 
-MODEL = "gpt-4o-mini"
+# OpenRouter configuration
+OPENROUTER_BASE_URL = "https://openrouter.ai/api/v1"
+MODEL = "openrouter/cypher-alpha:free"
 
 SYSTEM_OPTIMIST = (
     "You are an enthusiastic but rigorous peer reviewer. Provide arguments that SUPPORT the claim."  # noqa: E501
@@ -54,7 +57,10 @@ class DebaterAgent(BaseAgent):
             await self._emit_karma(self.agent_id, -1, reason="no-claim")
             return
 
-        client = openai.AsyncOpenAI()
+        client = openai.AsyncOpenAI(
+            api_key=os.getenv("OPENROUTER_API_KEY"),
+            base_url=OPENROUTER_BASE_URL,
+        )
         pros, cons = await self._generate_pro_con(client, claim)
         critique = {"pros": pros, "cons": cons, "claim": claim}
 
