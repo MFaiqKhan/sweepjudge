@@ -1,0 +1,69 @@
+# Byte-compiled / optimized / DLL files
+__pycache__/
+*.py[cod]
+*.pyd
+*.pyo
+*.so
+*.dylib
+
+# C extensions
+*.c
+*.cpp
+
+# Distribution / packaging
+build/
+dist/
+*.egg-info/
+.eggs/
+*.egg
+*.whl
+wheelhouse/
+pip-wheel-metadata/
+
+# Virtual environments (including uv)
+.venv/
+uv/
+uv-env/
+.env/
+
+# Installer logs
+pip-log.txt
+pip-delete-this-directory.txt
+
+# Unit test / coverage
+.cache/
+.pytest_cache/
+.coverage
+htmlcov/
+coverage.xml
+
+# MyPy
+.mypy_cache/
+.dmypy.json
+dmypy.json
+
+# Ruff / lint caches
+.ruff_cache/
+
+# IDE/editor folders
+.vscode/
+.idea/
+
+# Jupyter Notebook checkpoints
+.ipynb_checkpoints/
+
+# macOS & Windows
+.DS_Store
+Thumbs.db
+desktop.ini
+
+# Logs
+*.log
+
+# dotenv environment variables
+.env
+.env.*
+
+# Docker artifacts (optional; uncomment if used)
+# docker-compose.override.yml
+# *.dockerfile 

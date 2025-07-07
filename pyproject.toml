@@ -1,0 +1,18 @@
+[project]
+name = "karma-sandbox"
+version = "0.1.0"
+description = "Multimodal researcher with karma-based agent alignment"
+requires-python = ">=3.11"
+
+dependencies = [
+  "openai",
+  "redis[asyncio]",
+  "PyPDF2",
+  "aiohttp",
+  "SQLAlchemy[asyncio]>=2.0",
+  "asyncpg",
+  "tiktoken"
+]
+
+[tool.uv]
+# optional uv-specific settings 
