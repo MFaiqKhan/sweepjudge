@@ -248,3 +248,135 @@ Next-planned karma (deep economy):
 Together these additions turn the leaderboard into a living trust economy where quality, efficiency, specialization, community validation, and continued participation all shape which agent gets the next job.
 
 © 2025 Karma Sandbox | MIT License 
+
+## 12  Architecture Evolution – v1 ➜ v2 (✅ v2 COMPLETE)
+
+The migration described below has now been merged into `master` – **v2 is the default runtime going forward.**
+This repository originally shipped with a **v1** architecture that used Redis for its task
+queue and a hard-coded agent registry.  The codebase is now moving toward **v2**, which
+consolidates all state in Postgres and lets agents self-register their capabilities.
+The table below summarises the differences and what to change if you still want to run v1.
+
+| Concern | v1 (legacy) | v2 (current / WIP) |
+|---------|-------------|--------------------|
+| **LLM provider** | OpenAI `gpt-4o-mini` | OpenRouter `openrouter/cypher-alpha:free` (set `OPENROUTER_API_KEY`) |
+| **Task queue** | Redis List + `BLPOP` | Postgres `tasks` table + `LISTEN/NOTIFY` + `SELECT … FOR UPDATE SKIP LOCKED` |
+| **Agent discovery** | `STATIC_AGENT_REGISTRY` dict in `scheduler.py` | `agents` table.  Each container calls 
+`AgentDirectory.register()` at startup and heartbeats every 30 s. |
+| **Failure recovery** | In-memory only; tasks lost if Redis flushed | Durable—tasks survive crashes; stuck tasks are 
+retried when agent heartbeat is stale. |
+| **Dependencies** | `redis` Python pkg + Docker service | No Redis dependency.  Only Postgres (`asyncpg`) |
+| **Docker compose** | `services: redis:` block, port 6379 | Redis block removed.  Ensure Postgres is reachable on 
+`DATABASE_URL`. |
+
+### 12.1  Running **v1** (legacy)
+
+```bash
+# 1. keep Redis service in compose
+$ docker compose up -d redis postgres
+
+# 2. set OpenAI key
+$ export OPENAI_API_KEY="sk-…"
+
+# 3. run orchestrator
+$ python -m app.orchestrator.orchestrator
+```
+
+### 12.2  Running **v2** (current)
+
+```bash
+# 1.  (If you *don't* want Docker) create a virtual-env and install deps
+$ python -m venv .venv && source .venv/bin/activate   # PowerShell: .venv\Scripts\Activate
+$ uv pip install -e .
+
+# 2.  Start PostgreSQL locally (e.g. via Docker Desktop, Homebrew, or your favourite package manager) and set DATABASE_URL.
+#     The default used by the code is:
+#     postgresql+asyncpg://postgres:postgres@localhost:5432/karma
+#     Create the "karma" database if it doesn't already exist.
+
+# 3.  Export secrets
+$ export OPENROUTER_API_KEY="sk-…"
+
+# 4.  Launch the orchestrator (creates tables on first run)
+$ python -m app.orchestrator.orchestrator
+```
+
+If you prefer Docker the previous instructions still work – the `redis` service has been removed and a `postgres` service added.
+
+### 12.3  What changed in the code?
+
+* **`app/orchestrator/scheduler.py`** – Redis logic replaced by Postgres-backed `TaskQueue` and `AgentDirectory` look-ups.
+* **`app/agents/*_agent.py`** – LLM client initialisation switched to OpenRouter and each agent now calls `AgentDirectory.register()`.
+* **`pyproject.toml`** – removed `"redis[asyncio]"`; added any new packages (`asyncio-pg-notify` if used).
+* **`docker-compose.yml`** – dropped `redis:` service block.
+
+### 12.4  Transitional tips
+
+1. If you had already installed the old requirements, run `uv pip sync` again after the changes to uninstall `redis`.
+2. To verify the new queue, open `psql` and run `LISTEN task_queue;` – you should see notifications as tasks are enqueued.
+3. Heartbeat interval and retry logic are configurable via env vars: `AGENT_HEARTBEAT_SEC`, `TASK_RETRY_SEC` (see `settings.py`).
+
+> **Note**: The migration does **not** use Alembic because no data has been stored yet.  On first run the code auto-creates the `agents` and `tasks` tables.
+
+--- 
+
+## 13  Codebase Overview
+
+```text
+app/
+├─ agents/                # Micro-agents that perform each task
+│   ├─ base.py            # Shared BaseAgent class (registration, inbox loop)
+│   ├─ fetcher_agent.py   # Downloads PDF
+│   ├─ reader_agent.py    # Summarises PDF chunks (OpenRouter LLM)
+│   ├─ metrician_agent.py # Extracts metric tables
+│   ├─ analyst_agent.py   # Builds comparison Markdown
+│   ├─ debater_agent.py   # Generates pros/cons (optimist & sceptic prompts)
+│   └─ synthesiser_agent.py # Produces final report
+│
+├─ core/
+│   ├─ models.py          # Pydantic data models + new Task/Agent records
+│   ├─ tables.py          # SQLAlchemy tables & triggers for Postgres
+│   ├─ karma.py           # Postgres-backed karma ledger
+│   ├─ agent_directory.py # NEW: dynamic agent registry + heartbeats
+│   └─ task_queue.py      # NEW: durable task queue (LISTEN/NOTIFY)
+│
+├─ orchestrator/
+│   ├─ scheduler.py       # Picks best agent (karma + capabilities)
+│   └─ orchestrator.py    # Boots everything, wires inboxes
+│
+└─ utils/                 # PDF helpers, metrics regex, text splitting
+```
+
+Other root files:
+* **pyproject.toml** – dependencies (no Redis), `asyncpg`, `SQLAlchemy[asyncio]`.
+* **docker-compose.yml** – `postgres` + `app` services, no Redis.
+* **scripts/** – demo helpers.
+
+---
+
+## 14  How the System Works (v2 data-flow)
+
+1. **Agent bootstrap**  
+   Each agent instance starts, calls `AgentDirectory.register()` with the list of `task_types` it can handle, and begins sending a heartbeat every 30 s.  A Postgres row is created/updated in the `agents` table.
+
+2. **Task submission**  
+   Any agent (or external client) inserts a new Task via `TaskQueue.push()`.  The `INSERT` fires a trigger that executes `pg_notify('task_queue', <task-id>)`.
+
+3. **Scheduler wake-up**  
+   `scheduler.py` is listening on that channel.  When a notification arrives it dequeues the oldest queued task using `SELECT … FOR UPDATE SKIP LOCKED` to keep concurrency safe.
+
+4. **Agent selection**  
+   Scheduler asks `AgentDirectory.get_candidates(task_type)` for currently active agents that claim that capability, then fetches each candidate's karma score (`karma.py`).  Highest score wins (ties resolved by alphabetical ID).
+
+5. **Task delivery**  
+   Scheduler puts the Task object into the chosen agent's asyncio `inbox`.  The agent processes it, emits follow-up tasks and karma deltas, and updates artifacts within the Task.
+
+6. **Task completion / failure**  
+   Agent calls `queue.mark_completed()` or `mark_failed()`.  Status field changes in Postgres so the task history is persisted.
+
+7. **Stuck-task recovery**  
+   A background coroutine periodically requeues tasks stuck in `in_progress` past a timeout, guarding against agent crashes.
+
+The entire pipeline therefore runs with **one dependency: PostgreSQL**.  If you add more agents or task types, they simply register themselves; no code changes required.
+
+--- 
