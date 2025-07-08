@@ -26,7 +26,7 @@ class _BasePart(BaseModel):
 
     class Config:
         extra = "forbid"
-        allow_mutation = False
+        frozen = True
 
 
 class TextPart(_BasePart):
@@ -78,8 +78,8 @@ class Artifact(BaseModel):
 
     class Config:
         extra = "forbid"
-        allow_mutation = False
-        allow_population_by_field_name = True
+        frozen = True
+        validate_by_name = True
 
 
 # ---------------------------------------------------------------------------
@@ -99,7 +99,7 @@ class Message(BaseModel):
 
     class Config:
         extra = "forbid"
-        allow_mutation = False
+        frozen = True
 
 
 # ---------------------------------------------------------------------------
@@ -128,7 +128,7 @@ class Task(BaseModel):
 
     class Config:
         extra = "forbid"
-        allow_population_by_field_name = True
+        validate_by_name = True
 
 
 # ---------------------------------------------------------------------------
@@ -151,7 +151,7 @@ class AgentRecord(BaseModel):
     
     class Config:
         extra = "allow"
-        orm_mode = True
+        from_attributes = True
 
 
 class DBTaskStatus(str, Enum):
@@ -176,4 +176,4 @@ class TaskRecord(BaseModel):
     
     class Config:
         extra = "allow"
-        orm_mode = True 
+        from_attributes = True 

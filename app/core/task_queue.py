@@ -17,7 +17,7 @@ from typing import Any, Dict, List, Optional
 
 from sqlalchemy import and_, delete, func, insert, select, text, update
 from sqlalchemy.ext.asyncio import AsyncConnection, AsyncEngine, create_async_engine
-from sqlalchemy.ext.asyncio.connection import AsyncConnection
+# (Error , commented and not deleted just for reference) from sqlalchemy.ext.asyncio.connection import AsyncConnection There is no connection sub-package. AsyncConnection already comes from sqlalchemy.ext.asyncio.
 
 from app.core.models import DBTaskStatus, Task, TaskRecord
 from app.core.tables import schema_creation_sql, tasks
