@@ -6,7 +6,7 @@ requires-python = ">=3.11"
 
 dependencies = [
   "openai",
-  "redis[asyncio]",
+  "redis",
   "PyPDF2",
   "aiohttp",
   "SQLAlchemy[asyncio]>=2.0",

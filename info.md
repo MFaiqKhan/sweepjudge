@@ -23,7 +23,9 @@ curl -LsSf https://astral.sh/uv/install.sh | sh    # < 5 s
 
 # B) create env + install deps (first time only)
 uv venv
-uv pip sync          # reads pyproject.toml (≈ 30-40 s)
+uv pip sync          # You need to have requirements.txt or requirements.lock
+    or
+uv pip install -e .   # tells uv to read pyproject.toml (Install the project itself by reading pyproject.toml)
 
 # C) export your secrets into the shell
 export $(cat .env | xargs)
