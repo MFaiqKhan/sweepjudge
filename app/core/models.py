@@ -6,6 +6,7 @@ Redis messages and future HTTP adapters. Keeping them in one place ensures
 validation is consistent across orchestrator and agents.
 """
 
+from datetime import datetime
 from enum import Enum
 from typing import Any, List, Literal, Optional, Union
 from uuid import UUID, uuid4
@@ -127,4 +128,52 @@ class Task(BaseModel):
 
     class Config:
         extra = "forbid"
-        allow_population_by_field_name = True 
+        allow_population_by_field_name = True
+
+
+# ---------------------------------------------------------------------------
+# Database schema models for v2 architecture
+# ---------------------------------------------------------------------------
+
+class AgentStatus(str, Enum):
+    """Possible states of an agent."""
+    active = "active"
+    inactive = "inactive"
+
+
+class AgentRecord(BaseModel):
+    """Agent record for the agents table."""
+    id: str
+    task_types: List[str]
+    last_heartbeat: datetime = Field(default_factory=datetime.utcnow)
+    status: AgentStatus = AgentStatus.active
+    created_at: datetime = Field(default_factory=datetime.utcnow)
+    
+    class Config:
+        extra = "allow"
+        orm_mode = True
+
+
+class DBTaskStatus(str, Enum):
+    """Task statuses in the database."""
+    queued = "queued"
+    in_progress = "in_progress"
+    completed = "completed"
+    failed = "failed"
+    canceled = "canceled"
+
+
+class TaskRecord(BaseModel):
+    """Task record for the tasks table."""
+    id: UUID = Field(default_factory=uuid4)
+    task_type: str
+    payload: dict[str, Any]
+    status: DBTaskStatus = DBTaskStatus.queued
+    agent_id: Optional[str] = None
+    created_at: datetime = Field(default_factory=datetime.utcnow)
+    updated_at: datetime = Field(default_factory=datetime.utcnow)
+    session_id: Optional[str] = None
+    
+    class Config:
+        extra = "allow"
+        orm_mode = True 
