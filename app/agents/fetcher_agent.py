@@ -17,7 +17,7 @@ import logging
 from pathlib import Path
 from typing import Any
 
-from app.core import Artifact, FilePart, Message, Role, Task, TaskStatus, TextPart
+from app.core import Artifact, FilePart, FileContent, Message, Role, Task, TaskStatus, TextPart
 from app.utils.pdf_tools import fetch_pdf
 
 from .base import BaseAgent
@@ -44,7 +44,8 @@ class FetcherAgent(BaseAgent):
             return
 
         # Build artifact referencing the local file URI (not bytes for now)
-        part = FilePart(file={"uri": str(pdf_path)})  # type: ignore[arg-type]
+        uri_str = str(pdf_path)
+        part = FilePart(type="file", file={"uri": uri_str})
         artifact = Artifact(name="paper", parts=[part])
         # Update task status to completed
         task.status = TaskStatus.completed
