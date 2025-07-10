@@ -10,8 +10,22 @@ dependencies = [
   "aiohttp",
   "SQLAlchemy[asyncio]>=2.0",
   "asyncpg>=0.28.0",
-  "tiktoken"
+  "tiktoken",
+  "python-dotenv",
+  "psycopg2-binary",
+  "psutil",
 ]
+
+[build-system]
+requires = ["setuptools>=68", "wheel"]
+# NOTE: We explicitly pin build backend and list packages below because
+# setuptools' automatic discovery choked on the `data/` directory and raised:
+#   error: Multiple top-level packages discovered in a flat-layout: ['app', 'data']
+# By declaring `packages = ["app"]` we ensure only the actual code is shipped.
+build-backend = "setuptools.build_meta"
+
+[tool.setuptools]
+packages = ["app"]
 
 [tool.uv]
 # optional uv-specific settings 
