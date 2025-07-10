@@ -22,14 +22,24 @@ def chunk_text(text: str, max_tokens: int = 3000, overlap: int = 200) -> List[st
     Uses sliding window with *overlap* tokens for context retention.
     """
 
+    if overlap >= max_tokens:
+        raise ValueError("overlap must be smaller than max_tokens to guarantee progress")
+
     tokens = ENC.encode(text)
+    n_tokens = len(tokens)
     chunks: List[str] = []
     start = 0
-    while start < len(tokens):
-        end = min(start + max_tokens, len(tokens))
+
+    while start < n_tokens:
+        end = min(start + max_tokens, n_tokens)
         chunk_tokens = tokens[start:end]
         chunks.append(ENC.decode(chunk_tokens))
-        start = end - overlap  # slide window with overlap
-        if start < 0:
-            start = 0
+
+        if end == n_tokens:
+            # Reached the end; exit to avoid infinite loop when remaining tokens < overlap
+            break
+
+        # Advance the window keeping the desired overlap
+        start = end - overlap
+
     return chunks 
