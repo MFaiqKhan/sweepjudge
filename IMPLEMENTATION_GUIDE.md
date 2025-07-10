@@ -8,6 +8,62 @@
 
 This document provides a deep, technical overview of the Karma Sandbox's core architecture. It is intended for developers who wish to understand the internal mechanics of the system, from task queuing to agent execution and the flow of karma.
 
+## Change History (Agile Iterations)
+We maintain this project using an agile-like methodology, with iterative improvements based on user feedback, bug fixes, and feature enhancements. Below is a step-by-step history of major versions and changes, including code diffs where relevant. Each 'iteration' represents a cycle of planning, implementation, testing, and review.
+
+### Iteration 0: Initial v1 (Legacy - Redis-Based)
+- **Focus:** Basic mono-repo pipeline with static agent registry and Redis queue.
+- **Key Components:** `STATIC_AGENT_REGISTRY` in `scheduler.py`, Redis for task queue, OpenAI for LLMs.
+- **Changes:** N/A (baseline).
+- **Status:** Deprecated; useful for backward compatibility via `USE_FALLBACK_REGISTRY` env var.
+
+### Iteration 1: v2 Migration (Postgres-Backend)
+- **Focus:** Replace Redis with Postgres for durability; add dynamic agent registration.
+- **Key Changes:**
+  - New `core/task_queue.py` and `core/agent_directory.py` for Postgres-based queue and directory.
+  - Agents now register via `AgentDirectory.register()` in `base.py`.
+  - Scheduler falls back to static registry if no agents registered.
+  - Removed Redis from `docker-compose.yml`; added Postgres service.
+  - Updated deps in `pyproject.toml`: removed `redis`; added `asyncpg`, `SQLAlchemy[asyncio]`.
+- **Rationale:** Improves durability, reduces dependencies; based on user-reported Redis issues.
+- **Diff Example (scheduler.py):**
+  ```diff
+  - # Redis logic
+  + # Postgres TaskQueue
+  ```
+- **Status:** Current baseline.
+
+### Iteration 2: DB Compatibility & Error Fixes
+- **Focus:** Handle PgBouncer/Supabase issues (prepared statements, LISTEN/NOTIFY).
+- **Key Changes:**
+  - Engine config in `task_queue.py`: `statement_cache_size=0`, `poolclass=NullPool`.
+  - Replaced LISTEN/NOTIFY with polling in `_notification_listener()`.
+  - Split SQL execution in `create_schema` to avoid transaction mode issues.
+  - Added IPv4 pooler URL support in `.env`.
+- **Rationale:** User errors like 'DuplicatePreparedStatementError' on Supabase.
+- **Status:** Stable for cloud DBs.
+
+### Iteration 3: Performance Logging & Hang Fixes
+- **Focus:** Debug 'hangs' in ReaderAgent; add granular logging and safeguards.
+- **Key Changes:**
+  - Detailed logs in `reader_agent.py`: extraction/chunking/summarization timings, peak memory via `psutil`/`resource`.
+  - Fixed infinite loop in `text_split.py` chunk_text (break on end-of-text).
+  - Added LLM timeouts (30s) and configurable max_chunks (env: MAX_SUMMARY_CHUNKS, default 5) to respect rate limits.
+  - Cross-platform memory logging (psutil on Windows).
+  - Added `psutil` to `pyproject.toml` dependencies.
+- **Rationale:** User reports of 'hangs' during summarization; traced to slow LLM calls and chunking loops.
+- **Diff Example (reader_agent.py):**
+  ```diff
+  + max_chunks = int(os.getenv("MAX_SUMMARY_CHUNKS", 5))
+  + if len(chunks) > max_chunks: chunks = chunks[:max_chunks]
+  ```
+- **Status:** Improved debuggability; prevents API overload.
+
+### Next Iteration (Planned)
+- **User Stories:** Enhance error handling for PDF parsing; integrate profiling tools like Sciagraph.
+- **Backlog:** Dynamic karma rewards, peer validation.
+- **Review:** After each run, check logs for outliers (e.g., duration/token > 0.001s); profile slow chunks.
+
 ## Part 1: Current Core Architecture (Phase 1)
 
 The current system is a mono-repository, multi-agent pipeline that runs entirely on a single machine. It is designed as a closed loop where agents are orchestrated by a central scheduler, communicating via an in-process message bus.
@@ -53,7 +109,7 @@ All agents inherit from `BaseAgent`.
 
 ### 1.5. Data Flow: A Complete Example (`Fetch_Paper` -> `Summarise_Paper`)
 
-1.  **Initial Task:** `start_dev.py` enqueues a `Task` with `task_type="Fetch_Paper"`.
+1.  **Initial Task:** `run_pipeline.py` enqueues a `Task` with `task_type="Fetch_Paper"`.
 2.  **Scheduling:** The `Scheduler` pops this task, sees that `fetcher-1`, `fetcher-2`, and `fetcher-3` are candidates, checks their karma scores, and assigns the task to the one with the highest score (e.g., `fetcher-1`).
 3.  **Execution (Fetcher):** `fetcher-1` receives the task, downloads the PDF, and saves it locally.
 4.  **Feedback & Follow-up (Fetcher):**
@@ -190,7 +246,7 @@ export OPENAI_API_KEY=sk-...
 export DATABASE_URL=postgresql+asyncpg://postgres:postgres@localhost:5432/karma
 export REDIS_URL=redis://localhost:6379/0
 createdb karma   # if using local Postgres
-python scripts/start_dev.py --url https://arxiv.org/pdf/2106.09685.pdf
+python scripts/run_pipeline.py --url https://arxiv.org/pdf/2106.09685.pdf
 ```
 
 ### A.3. Docker Compose
@@ -246,4 +302,4 @@ CREATE TABLE karma_events (
 );
 ```
 
---- 
+---

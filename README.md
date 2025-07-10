@@ -65,8 +65,8 @@ findmyrecruitment/
 │  ├─ core/
 │  │   ├─ karma.py             # Ledger class, Postgres driver
 │  │   ├─ models.py            # Pydantic schemas mirroring A2A
-│  │   ├─ storage.py           # Qdrant / PDF cache helpers
-│  │   └─ settings.py          # env vars, paths
+│  │   ├─ tables.py            # SQLAlchemy table definitions
+│  │   └─ task_queue.py        # Postgres-backed durable queue
 │  └─ utils/
 │     ├─ pdf_tools.py
 │     └─ rag_client.py
@@ -74,7 +74,7 @@ findmyrecruitment/
 │  └─ corpus/                  # pilot PDFs
 ├─ scripts/
 │  ├─ populate_corpus.py
-│  └─ start_dev.sh
+│  └─ run_pipeline.py
 ├─ tests/
 │  └─ test_extract_metrics.py
 ├─ docker-compose.yml
@@ -162,7 +162,7 @@ $ uv venv && uv pip sync
 # 4 add your secrets
 $ cp .env.example .env && edit .env
 # 5 launch pipeline + enqueue default PDF
-$ python scripts/start_dev.py --url https://arxiv.org/pdf/2106.09685.pdf
+$ python scripts/run_pipeline.py --url https://arxiv.org/pdf/2106.09685.pdf
 ```
 
 ### Run via Docker

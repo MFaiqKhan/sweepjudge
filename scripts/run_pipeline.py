@@ -23,12 +23,15 @@ import logging
 import sys
 from pathlib import Path
 
+from dotenv import load_dotenv
+
 from app.core import Task
 from app.core.task_queue import TaskQueue
 from app.orchestrator.orchestrator import OrchestratorRuntime
 
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
+load_dotenv()
 
 DEFAULT_PDF = "https://arxiv.org/pdf/2106.09685.pdf"
 

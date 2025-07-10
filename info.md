@@ -30,14 +30,14 @@ uv pip install -e .   # tells uv to read pyproject.toml (Install the project its
 # C) export your secrets into the shell
 export $(cat .env | xargs)
 
-# D) clear redis + start the pipeline on a sample PDF
-python scripts/start_dev.py \
+# D) start the pipeline on a sample PDF
+python scripts/run_pipeline.py \
   --url https://arxiv.org/pdf/2106.09685.pdf
 ```
 
 The script:
-1. wipes the Redis queue,
-2. boots the orchestrator runtime (spawns all 12 in-process agents),
+1. creates (if missing) the Postgres tables for `tasks`, `agents`, and `karma`,
+2. boots the orchestrator runtime (spawns all micro-agents),
 3. enqueues an initial `Fetch_Paper` task for the given arXiv PDF.
 
 ────────────────────────────────────────
@@ -48,10 +48,10 @@ cp .env.example .env     # add your keys
 docker compose up --build
 ```
 Compose spins up:
-• `redis` (port 6379)  
+• `postgres` (port 5432)  
 • `app`  (our code inside Python 3.11 + uv)
 
-The container automatically runs the same `start_dev.py` script with the default sample PDF.
+The container automatically runs the same `run_pipeline.py` script with the default sample PDF.
 
 ────────────────────────────────────────
 3.  What happens inside – step by step
@@ -107,7 +107,7 @@ grep -A2 "produced final report"  app  # displays Markdown text
 Run the script again with any PDF URL (ACL, arXiv, etc.):
 
 ```bash
-python scripts/start_dev.py --url https://arxiv.org/pdf/2404.01234.pdf
+python scripts/run_pipeline.py --url https://arxiv.org/pdf/2404.01234.pdf
 ```
 
 Agents’ karma persists in Supabase, so over multiple runs the scheduler will
