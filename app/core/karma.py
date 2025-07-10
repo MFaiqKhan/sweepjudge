@@ -16,6 +16,7 @@ from typing import Optional
 from sqlalchemy import BigInteger, Column, DateTime, Integer, MetaData, String, Table, text
 from sqlalchemy.ext.asyncio import AsyncEngine, AsyncSession, async_sessionmaker, create_async_engine
 from sqlalchemy.sql import select
+from sqlalchemy.pool import NullPool
 
 
 _DEFAULT_DB_URL = "postgresql+asyncpg://postgres:postgres@db:5432/karma"
@@ -57,7 +58,24 @@ class KarmaLedger:
     @classmethod
     def from_env(cls) -> "KarmaLedger":
         db_url = os.getenv("DATABASE_URL", _DEFAULT_DB_URL)
-        engine = create_async_engine(db_url, echo=False)
+        
+        # Ensure we're using asyncpg dialect
+        if not db_url.startswith("postgresql+asyncpg://"):
+            if db_url.startswith("postgresql://"):
+                db_url = db_url.replace("postgresql://", "postgresql+asyncpg://")
+        
+        # Create engine with proper settings for pgbouncer compatibility
+        engine_kwargs = {
+            "echo": False,
+            # Apply these connect arguments to every connection created from the pool
+            "connect_args": {
+                "statement_cache_size": 0,  # Disable prepared statements for pgbouncer
+            },
+            # Disable the connection pool to avoid issues with pgbouncer
+            "poolclass": NullPool,
+        }
+        
+        engine = create_async_engine(db_url, **engine_kwargs)
         return cls(engine)
 
     async def create_schema(self) -> None:

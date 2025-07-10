@@ -13,8 +13,9 @@ import logging
 import os
 from typing import List, Optional
 
-from sqlalchemy import and_, insert, select, update
+from sqlalchemy import and_, insert, select, update, text
 from sqlalchemy.ext.asyncio import AsyncConnection, AsyncEngine, create_async_engine
+from sqlalchemy.pool import NullPool  # Correct import path for NullPool
 
 from app.core.models import AgentRecord, AgentStatus
 from app.core.tables import agents
@@ -45,7 +46,24 @@ class AgentDirectory:
     def from_env(cls) -> AgentDirectory:
         """Create an AgentDirectory from the DATABASE_URL env var."""
         db_url = os.getenv("DATABASE_URL", "postgresql+asyncpg://postgres:postgres@db:5432/karma")
-        engine = create_async_engine(db_url, echo=False)
+        
+        # Ensure we're using asyncpg dialect
+        if not db_url.startswith("postgresql+asyncpg://"):
+            if db_url.startswith("postgresql://"):
+                db_url = db_url.replace("postgresql://", "postgresql+asyncpg://")
+        
+        # Create engine with proper settings for pgbouncer compatibility
+        engine_kwargs = {
+            "echo": False,
+            # Apply these connect arguments to every connection created from the pool
+            "connect_args": {
+                "statement_cache_size": 0,  # Disable prepared statements for pgbouncer
+            },
+            # Disable the connection pool to avoid issues with pgbouncer
+            "poolclass": NullPool,
+        }
+        
+        engine = create_async_engine(db_url, **engine_kwargs)
         return cls(engine)
         
     async def create_schema(self) -> None:
@@ -59,21 +77,33 @@ class AgentDirectory:
         If the agent already exists, update its task_types and mark it active.
         """
         async with self._engine.begin() as conn:
-            # Try to insert, on conflict update the task_types and last_heartbeat
-            stmt = insert(agents).values(
-                id=agent_id,
-                task_types=task_types,
-                last_heartbeat=dt.datetime.utcnow(),
-                status=AgentStatus.active.value,
-            ).on_conflict_do_update(
-                index_elements=[agents.c.id],
-                set_={
-                    "task_types": task_types,
-                    "last_heartbeat": dt.datetime.utcnow(),
-                    "status": AgentStatus.active.value,
-                }
+            # First check if the agent already exists
+            result = await conn.execute(
+                select(agents).where(agents.c.id == agent_id)
             )
-            await conn.execute(stmt)
+            existing_agent = result.first()
+            
+            if existing_agent:
+                # Update existing agent
+                await conn.execute(
+                    update(agents)
+                    .where(agents.c.id == agent_id)
+                    .values(
+                        task_types=task_types,
+                        last_heartbeat=dt.datetime.utcnow(),
+                        status=AgentStatus.active.value,
+                    )
+                )
+            else:
+                # Insert new agent
+                await conn.execute(
+                    insert(agents).values(
+                        id=agent_id,
+                        task_types=task_types,
+                        last_heartbeat=dt.datetime.utcnow(),
+                        status=AgentStatus.active.value,
+                    )
+                )
         
         # Start a heartbeat task for this agent if not already running
         if agent_id not in self._heartbeat_tasks:
@@ -116,13 +146,18 @@ class AgentDirectory:
         cutoff = dt.datetime.utcnow() - dt.timedelta(seconds=STALE_AGENT_THRESHOLD)
         
         async with self._engine.connect() as conn:
+            # Use a different approach to check if task_type is in the array
+            # Instead of using contains() which isn't supported, use a text query
+            query = text("""
+                SELECT id FROM agents 
+                WHERE status = :status 
+                AND last_heartbeat >= :cutoff
+                AND :task_type = ANY(task_types)
+            """)
+            
             result = await conn.execute(
-                select(agents.c.id)
-                .where(and_(
-                    agents.c.task_types.contains([task_type]),
-                    agents.c.status == AgentStatus.active.value,
-                    agents.c.last_heartbeat >= cutoff
-                ))
+                query,
+                {"status": AgentStatus.active.value, "cutoff": cutoff, "task_type": task_type}
             )
             return [row[0] for row in result]
     
