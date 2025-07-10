@@ -60,9 +60,12 @@ END;
 $$ LANGUAGE plpgsql;
 """
 
-# Trigger to fire notification when task is inserted
-create_task_notify_trigger_sql = """
+# Trigger to fire notification when task is inserted - split into separate statements
+drop_task_notify_trigger_sql = """
 DROP TRIGGER IF EXISTS task_notify_trigger ON tasks;
+"""
+
+create_task_notify_trigger_sql = """
 CREATE TRIGGER task_notify_trigger
 AFTER INSERT ON tasks
 FOR EACH ROW
@@ -80,19 +83,24 @@ END;
 $$ LANGUAGE plpgsql;
 """
 
-# Trigger to update timestamp when task is updated
-create_task_timestamp_trigger_sql = """
+# Trigger to update timestamp when task is updated - split into separate statements
+drop_task_timestamp_trigger_sql = """
 DROP TRIGGER IF EXISTS task_timestamp_trigger ON tasks;
+"""
+
+create_task_timestamp_trigger_sql = """
 CREATE TRIGGER task_timestamp_trigger
 BEFORE UPDATE ON tasks
 FOR EACH ROW
 EXECUTE FUNCTION update_task_timestamp();
 """
 
-# All SQL to execute when creating schema
+# All SQL to execute when creating schema - each statement separately
 schema_creation_sql = [
     notify_new_task_sql,
+    drop_task_notify_trigger_sql,
     create_task_notify_trigger_sql,
     update_task_timestamp_sql,
+    drop_task_timestamp_trigger_sql,
     create_task_timestamp_trigger_sql,
 ] 
