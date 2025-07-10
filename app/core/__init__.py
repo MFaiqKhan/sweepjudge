@@ -1,6 +1,7 @@
 from .models import (
     Artifact,
     DataPart,
+    FileContent,
     FilePart,
     Message,
     Part,
@@ -13,6 +14,7 @@ from .models import (
 __all__ = [
     "Artifact",
     "DataPart",
+    "FileContent",
     "FilePart",
     "Message",
     "Part",

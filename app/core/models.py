@@ -11,7 +11,7 @@ from enum import Enum
 from typing import Any, List, Literal, Optional, Union
 from uuid import UUID, uuid4
 
-from pydantic import BaseModel, Field, validator
+from pydantic import BaseModel, Field, validator, model_validator
 
 
 # ---------------------------------------------------------------------------
@@ -42,11 +42,12 @@ class FileContent(BaseModel):
     bytes_b64: Optional[str] = Field(None, alias="bytes")
     uri: Optional[str] = None
 
-    @validator("bytes_b64", always=True)
-    def _one_of_bytes_or_uri(cls, v, values):
-        if (v is None) == (values.get("uri") is None):
+    # ensure exactly one of bytes_b64 or uri is provided (defer check until both fields parsed)
+    @model_validator(mode="after")
+    def _one_of_bytes_or_uri(cls, values):  # type: ignore[return-value]
+        if (values.bytes_b64 is None) == (values.uri is None):
             raise ValueError("Either `bytes` or `uri` must be provided, but not both.")
-        return v
+        return values
 
 
 class FilePart(_BasePart):
