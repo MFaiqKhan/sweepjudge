@@ -12,8 +12,14 @@ dependencies = [
   "asyncpg>=0.28.0",
   "tiktoken",
   "python-dotenv",
-  "psycopg2-binary",
+  "psycopg[binary]",
   "psutil",
+  "fastapi",
+  "uvicorn[standard]",
+  "typer",
+  "httpx",
+  "pdfplumber",
+  "pymupdf",
 ]
 
 [build-system]
