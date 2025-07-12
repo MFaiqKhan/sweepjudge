@@ -36,6 +36,12 @@ class FetcherAgent(BaseAgent):
             await self._emit_karma(self.agent_id, -1, reason="missing-url")
             return
 
+        # --- Specialization: Use a configured User-Agent ---
+        user_agent = self.config.get("user_agent", "DefaultResearchAgent/1.0")
+        logger.info(f"Fetcher {self.agent_id} using User-Agent: {user_agent}")
+        # In a real implementation, `fetch_pdf` would accept this user_agent
+        # For now, we just log it to show the config is being used.
+
         try:
             pdf_path: Path = await fetch_pdf(url)
         except Exception as exc:  # pylint: disable=broad-except
@@ -53,9 +59,11 @@ class FetcherAgent(BaseAgent):
 
         await self._emit_karma(self.agent_id, +2, reason="fetch-success")
 
-        # Create follow-up task for summariser
-        follow_payload: dict[str, Any] = {"pdf_path": str(pdf_path)}
-        follow_task = Task(task_type="Summarise_Paper", payload=follow_payload)
-        await self._emit_task(follow_task)
+        # Follow-up tasks
+        payload = {"pdf_path": str(pdf_path)}
+        # 1. Summariser (optional full summary)
+        await self._emit_task(Task(task_type="Summarise_Paper", payload=payload))
+        # 2. Pre-filter for metrics extraction
+        await self._emit_task(Task(task_type="Filter_Pages", payload=payload))
 
         logger.info("%s fetched %s -> %s", self.agent_id, url, pdf_path) 

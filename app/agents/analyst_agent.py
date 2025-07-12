@@ -29,6 +29,22 @@ class AnalystAgent(BaseAgent):
             await self._emit_karma(self.agent_id, -1, reason="no-metrics")
             return
 
+        # --- Specialization: Filter for focus_metrics if configured ---
+        focus_metrics = self.config.get("focus_metrics")
+        if focus_metrics:
+            logger.info(f"Analyst {self.agent_id} filtering for metrics: {focus_metrics}")
+            
+            # This logic assumes metrics_input is a list of dicts
+            # and we need to handle the list of lists case as well.
+            def filter_metrics(metrics: List[dict[str, Any]]) -> List[dict[str, Any]]:
+                return [m for m in metrics if m.get("metric", "").lower() in focus_metrics]
+
+            if metrics_input and isinstance(metrics_input[0], dict):
+                metrics_input = filter_metrics(metrics_input)
+            elif metrics_input: # List of lists
+                metrics_input = [filter_metrics(m_list) for m_list in metrics_input]
+        # ----------------------------------------------------------------
+
         # ensure list[list]
         if metrics_input and isinstance(metrics_input[0], dict):
             metrics_lists: List[List[dict[str, Any]]] = [metrics_input]  # type: ignore[arg-type]

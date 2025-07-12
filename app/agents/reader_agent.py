@@ -35,21 +35,22 @@ logger = logging.getLogger(__name__)
 # Previously used direct OpenAI model – now replaced by OpenRouter
 # MODEL = "gpt-4o-mini"
 
-# OpenRouter configuration
-OPENROUTER_BASE_URL = "https://openrouter.ai/api/v1"
-MODEL = "openrouter/cypher-alpha:free"
+# Commented out OpenRouter configuration
+# OPENROUTER_BASE_URL = "https://openrouter.ai/api/v1"
+# MODEL = "openrouter/cypher-alpha:free"
 
 SUMMARY_PROMPT = (
     "You are an expert ML researcher. Summarise the following paper section in 5\n"
     "bullet points capturing the main contributions, methods, and findings.\n"
 )
+DEFAULT_MODEL = "gpt-4o-mini-2"
 
 
-async def _summarise_chunk(client: openai.AsyncClient, chunk: str) -> str:
+async def _summarise_chunk(client: openai.AsyncClient, chunk: str, model: str, prompt: str) -> str:
     resp = await client.chat.completions.create(
-        model=MODEL,
+        model=model,
         messages=[
-            {"role": "system", "content": SUMMARY_PROMPT},
+            {"role": "system", "content": prompt},
             {"role": "user", "content": chunk},
         ],
         max_tokens=256,
@@ -77,9 +78,17 @@ class ReaderAgent(BaseAgent):
             await self._emit_karma(self.agent_id, -1, reason="empty-pdf")
             return
 
-        client = openai.AsyncOpenAI(
-            api_key=os.getenv("OPENROUTER_API_KEY"),
-            base_url=OPENROUTER_BASE_URL,
+        # --- Specialization: Use configured prompt and model ---
+        summary_prompt = self.config.get("summary_prompt", SUMMARY_PROMPT)
+        summary_model = self.config.get("summary_model", DEFAULT_MODEL)
+        logger.info(f"Reader {self.agent_id} using model '{summary_model}' with prompt: '{summary_prompt[:50]}...'")
+
+
+        # Use Azure OpenAI GPT-4o-mini with config from .env
+        client = openai.AsyncAzureOpenAI(
+            azure_endpoint=os.getenv("AZURE_OPENAI_ENDPOINT"),
+            api_key=os.getenv("AZURE_OPENAI_API_KEY"),
+            api_version="2025-01-01-preview",
         )
         # --------------------------- Text → Chunks ---------------------------
         t1 = time.perf_counter()
@@ -104,7 +113,10 @@ class ReaderAgent(BaseAgent):
             start_time = time.perf_counter()
             try:
                 # Timeout after 30s to prevent indefinite hangs on slow LLM responses
-                summary = await asyncio.wait_for(_summarise_chunk(client, chunk), timeout=30.0)
+                summary = await asyncio.wait_for(
+                    _summarise_chunk(client, chunk, model=summary_model, prompt=summary_prompt), 
+                    timeout=30.0
+                )
                 duration = time.perf_counter() - start_time
                 logger.info("[%s] Chunk %d summarised in %.1fs (%d tokens) ", self.agent_id, idx, duration, token_len)
                 summaries.append(summary)
@@ -132,10 +144,11 @@ class ReaderAgent(BaseAgent):
 
         await self._emit_karma(self.agent_id, +3, reason="summary-ok")
 
-        # Emit next task – metrics extraction
-        follow_payload: dict[str, Any] = {"pdf_path": str(pdf_path)}
-        follow_task = Task(task_type="Extract_Metrics", payload=follow_payload)
-        await self._emit_task(follow_task)
+        # Optionally emit metrics extraction (legacy behaviour). Disabled by default
+        if self.config.get("emit_metrics", False):
+            follow_payload: dict[str, Any] = {"pdf_path": str(pdf_path)}
+            follow_task = Task(task_type="Extract_Metrics", payload=follow_payload)
+            await self._emit_task(follow_task)
 
         logger.info("%s summarised %s", self.agent_id, pdf_path)
 
