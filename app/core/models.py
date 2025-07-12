@@ -112,6 +112,7 @@ class TaskStatus(str, Enum):
     submitted = "submitted"
     working = "working"
     input_required = "input-required"
+    pending_review = "pending_review"  # New status
     completed = "completed"
     canceled = "canceled"
     failed = "failed"
@@ -159,6 +160,7 @@ class DBTaskStatus(str, Enum):
     """Task statuses in the database."""
     queued = "queued"
     in_progress = "in_progress"
+    pending_review = "pending_review"  # New status
     completed = "completed"
     failed = "failed"
     canceled = "canceled"
