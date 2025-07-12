@@ -57,19 +57,15 @@ class TaskQueue:
         """Create a TaskQueue from the DATABASE_URL env var."""
         db_url = os.getenv("DATABASE_URL", "postgresql+asyncpg://postgres:postgres@db:5432/karma")
         
-        # Ensure we're using asyncpg dialect
-        if not db_url.startswith("postgresql+asyncpg://"):
+        # Ensure we're using psycopg dialect for async support
+        if not db_url.startswith("postgresql+psycopg://"):
             if db_url.startswith("postgresql://"):
-                db_url = db_url.replace("postgresql://", "postgresql+asyncpg://")
+                db_url = db_url.replace("postgresql://", "postgresql+psycopg://")
         
-        # Create engine with proper settings for pgbouncer compatibility
+        # Create engine with PgBouncer compatibility settings
         engine_kwargs = {
             "echo": False,
-            # Apply these connect arguments to every connection created from the pool
-            "connect_args": {
-                "statement_cache_size": 0,  # Disable prepared statements for pgbouncer
-            },
-            # Disable the connection pool to avoid issues with pgbouncer
+            "connect_args": {"prepare_threshold": 0},
             "poolclass": NullPool,
         }
         
@@ -85,12 +81,9 @@ class TaskQueue:
             # Then create the tasks table
             await conn.run_sync(lambda conn: tasks.create(conn, checkfirst=True))
             
-            # Execute each SQL statement separately to avoid prepared statement issues with pgbouncer
+            # Execute schema creation SQL
             for sql in schema_creation_sql:
-                # Execute each SQL statement in a separate connection context to avoid prepared statement caching
-                async with self._engine.connect() as separate_conn:
-                    await separate_conn.execute(text(sql))
-                    await separate_conn.commit()
+                await conn.execute(text(sql))
     
     async def initialize(self) -> None:
         """Start listening for notifications and retrying stuck tasks."""
