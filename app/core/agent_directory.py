@@ -55,7 +55,9 @@ class AgentDirectory:
         # Create engine with PgBouncer compatibility settings
         engine_kwargs = {
             "echo": False,
-            "connect_args": {"prepare_threshold": 0},
+            "connect_args": {
+                "prepare_threshold": None,
+            },
             "poolclass": NullPool,
         }
         
@@ -66,11 +68,33 @@ class AgentDirectory:
         """Create the agents table if it doesn't exist."""
         async with self._engine.begin() as conn:
             await conn.run_sync(lambda conn: agents.create(conn, checkfirst=True))
+
+            # Ensure newly added columns exist for older deployments
+            # We use PostgreSQL "ADD COLUMN IF NOT EXISTS" which is idempotent.
+            await conn.execute(
+                text("""
+                ALTER TABLE agents ADD COLUMN IF NOT EXISTS class_name text;
+                """)
+            )
+            await conn.execute(
+                text("""
+                ALTER TABLE agents ADD COLUMN IF NOT EXISTS config jsonb;
+                """)
+            )
     
-    async def register(self, agent_id: str, task_types: List[str]) -> None:
+    async def register(
+        self,
+        agent_id: str,
+        task_types: List[str],
+        *,
+        class_name: Optional[str] = None,
+        config: Optional[dict] = None,
+    ) -> None:
         """Register an agent with its capabilities.
-        
-        If the agent already exists, update its task_types and mark it active.
+
+        • `class_name` and `config` are persisted so the orchestrator can
+          automatically respawn agents after a restart.
+        If the agent already exists, we update those fields and mark it active.
         """
         async with self._engine.begin() as conn:
             # First check if the agent already exists
@@ -88,6 +112,8 @@ class AgentDirectory:
                         task_types=task_types,
                         last_heartbeat=dt.datetime.utcnow(),
                         status=AgentStatus.active.value,
+                        class_name=class_name,
+                        config=config,
                     )
                 )
             else:
@@ -98,6 +124,8 @@ class AgentDirectory:
                         task_types=task_types,
                         last_heartbeat=dt.datetime.utcnow(),
                         status=AgentStatus.active.value,
+                        class_name=class_name,
+                        config=config,
                     )
                 )
         
@@ -121,13 +149,18 @@ class AgentDirectory:
                 )
             )
     
-    async def unregister(self, agent_id: str) -> None:
-        """Mark an agent as inactive but keep its record."""
+    async def unregister(self, agent_id: str, *, permanent: bool = False) -> None:
+        """Mark an agent as inactive or deleted.
+
+        If *permanent* is True the agent will never be respawned automatically
+        (status set to 'deleted').  Otherwise it's merely 'inactive' and will
+        be eligible for auto-respawn on the next orchestrator start.
+        """
         async with self._engine.begin() as conn:
             await conn.execute(
                 update(agents)
                 .where(agents.c.id == agent_id)
-                .values(status=AgentStatus.inactive.value)
+                .values(status="deleted" if permanent else AgentStatus.inactive.value)
             )
             
         # Cancel the heartbeat task if it exists
@@ -156,6 +189,57 @@ class AgentDirectory:
                 {"status": AgentStatus.active.value, "cutoff": cutoff, "task_type": task_type}
             )
             return [row[0] for row in result]
+
+    # ------------------------------------------------------------------
+    # Convenience helpers for orchestration
+    # ------------------------------------------------------------------
+
+    async def list_active(self) -> List[dict]:
+        """Return all agents that are currently *considered* active.
+
+        Active = `status = 'active'` AND `last_heartbeat` within
+        `STALE_AGENT_THRESHOLD` seconds. This is useful for an orchestrator
+        that has just restarted and wants to reconcile DB state with the
+        in-memory runtime.
+        """
+
+        cutoff = dt.datetime.utcnow() - dt.timedelta(seconds=STALE_AGENT_THRESHOLD)
+
+        async with self._engine.connect() as conn:
+            query = text(
+                """
+                SELECT id, task_types, last_heartbeat, status, class_name, config
+                FROM agents
+                WHERE status = :status AND last_heartbeat >= :cutoff
+                """
+            )
+            result = await conn.execute(
+                query,
+                {"status": AgentStatus.active.value, "cutoff": cutoff},
+            )
+
+            return list(result.mappings().all())
+
+    async def list_respawn_candidates(self) -> List[dict]:
+        """Return agents that have a stored class_name (i.e., can be respawned).
+
+        This ignores the current `status` field so that agents that were
+        previously marked inactive during a graceful shutdown are still
+        restarted on the next orchestrator boot.  Agents removed via the
+        CLI can be marked with a different status (e.g., 'deleted') to
+        avoid being respawned.
+        """
+
+        async with self._engine.connect() as conn:
+            query = text(
+                """
+                SELECT id, task_types, class_name, config
+                FROM agents
+                WHERE class_name IS NOT NULL AND status != 'deleted'
+                """
+            )
+            result = await conn.execute(query)
+            return list(result.mappings().all())
     
     # ------------------------------------------------------------------
     # Internal helpers

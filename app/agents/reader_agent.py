@@ -24,6 +24,7 @@ import time
 
 import openai
 import PyPDF2
+from pdf2image import convert_from_path
 
 from app.core import Artifact, Message, Part, Role, Task, TaskStatus, TextPart
 from app.utils.text_split import chunk_text, count_tokens
@@ -72,6 +73,7 @@ class ReaderAgent(BaseAgent):
         # ------------------------------- PDF → Text -------------------------------
         t0 = time.perf_counter()
         text = self._extract_text(pdf_path)
+        image_paths = await self._extract_images(pdf_path, task.session_id)
         extract_secs = time.perf_counter() - t0
         logger.info("[%s] Extracted text from %s (%.1fs, %d chars)", self.agent_id, pdf_path.name, extract_secs, len(text))
         if not text:
@@ -144,11 +146,14 @@ class ReaderAgent(BaseAgent):
 
         await self._emit_karma(self.agent_id, +3, reason="summary-ok")
 
-        # Optionally emit metrics extraction (legacy behaviour). Disabled by default
-        if self.config.get("emit_metrics", False):
-            follow_payload: dict[str, Any] = {"pdf_path": str(pdf_path)}
-            follow_task = Task(task_type="Extract_Metrics", payload=follow_payload)
-            await self._emit_task(follow_task)
+        # Forward summary for downstream agents
+        follow_payload: dict[str, Any] = {
+            "pdf_path": str(pdf_path),
+            "summary": combined_summary,
+            "image_paths": image_paths,
+        }
+        follow_task = Task(task_type="Extract_Metrics", payload=follow_payload)
+        await self._emit_task(follow_task)
 
         logger.info("%s summarised %s", self.agent_id, pdf_path)
 
@@ -163,4 +168,58 @@ class ReaderAgent(BaseAgent):
             return "\n".join(texts)
         except Exception as exc:  # pylint: disable=broad-except
             logger.exception("Failed to extract text: %s", exc)
-            return "" 
+            return ""
+
+    async def _extract_images(self, pdf_path: Path, session_id: str | None) -> List[str]:
+        """Extract images from PDF using PyMuPDF (fitz) instead of pdf2image/Poppler."""
+        try:
+            import fitz  # PyMuPDF
+            import io
+            from PIL import Image
+            
+            # Create results directory if needed
+            session_dir = Path("data/results")
+            if session_id:
+                session_dir = session_dir / session_id
+            session_dir.mkdir(parents=True, exist_ok=True)
+            
+            # Open the PDF
+            doc = fitz.open(str(pdf_path))
+            saved_paths = []
+            
+            # For each page
+            for page_num in range(len(doc)):
+                page = doc.load_page(page_num)
+                
+                # Get images from the page
+                image_list = page.get_images(full=True)
+                
+                for img_index, img_info in enumerate(image_list):
+                    try:
+                        xref = img_info[0]  # Get the image reference
+                        base_image = doc.extract_image(xref)
+                        image_bytes = base_image["image"]
+                        
+                        # Skip small images (likely icons or decorations)
+                        img = Image.open(io.BytesIO(image_bytes))
+                        width, height = img.size
+                        if width < 100 or height < 100:
+                            continue
+                            
+                        # Save the image
+                        img_path = session_dir / f"page_{page_num+1}_img_{img_index+1}.png"
+                        with open(img_path, "wb") as f:
+                            f.write(image_bytes)
+                        saved_paths.append(str(img_path))
+                    except Exception as img_exc:
+                        logger.warning(f"Failed to extract image {img_index} on page {page_num+1}: {img_exc}")
+            
+            logger.info("[%s] Extracted %d images from %s using PyMuPDF", self.agent_id, len(saved_paths), pdf_path.name)
+            return saved_paths
+            
+        except ImportError:
+            logger.warning("PyMuPDF (fitz) not installed, skipping image extraction")
+            return []
+        except Exception as e:
+            logger.error(f"Image extraction failed: {str(e)}")
+            return [] 

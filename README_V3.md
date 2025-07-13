@@ -9,6 +9,9 @@ This project is a multi-agent system designed for automated research, specifical
 3.  **Dynamic Review & Reward**: After an agent completes its work, its output artifact is sent to a specialized `ReviewerAgent`. This agent uses an LLM to assess the quality of the work and assigns a dynamic karma score, ensuring that rewards are based on quality, not just completion.
 4.  **Agent Specialization**: Agents are not one-size-fits-all. They can be configured at runtime with different "personalities" or capabilities. For example, you can spawn a `DebaterAgent` configured to be highly skeptical or a `MetricianAgent` that only looks for specific metrics.
 5.  **Token-Efficient PDF Filtering**: To minimize expensive LLM calls, a `PreFilterAgent` uses fast heuristics (keywords, regex, table detection) to identify the most relevant pages of a long PDF, sending only a small, targeted text snippet to the metrics extractor.
+6.  **Multi-Modal Analysis**: The system can now extract and analyze images from research papers, providing visual context alongside textual analysis in the final report.
+7.  **Intelligent Claim Generation**: The `AnalystAgent` uses LLM to generate meaningful claims from metrics data, which are then critiqued by the `DebaterAgent` to provide balanced analysis.
+8.  **Consistent Session Tracking**: All tasks within a workflow are tracked with a common session ID, ensuring artifacts are properly grouped and accessible to downstream agents.
 
 ## System Architecture
 
@@ -75,6 +78,28 @@ graph TD
     Reviewer --> |"Assigns Karma"| KarmaLedger
 ```
 
+## Recent Improvements
+
+### Enhanced Data Flow
+- Fixed session propagation to ensure all tasks in a workflow share the same session ID
+- Implemented proper data forwarding between agents (summaries, metrics, claims, etc.)
+- Added task deduplication to prevent duplicate processing
+
+### Intelligent Analysis
+- `AnalystAgent` now generates meaningful claims from metrics using LLM
+- `DebaterAgent` provides balanced critique of these claims with pros and cons
+- `SynthesiserAgent` creates comprehensive reports that integrate all findings
+
+### Multi-Modal Capabilities
+- Added image extraction from PDFs using PyMuPDF
+- Images are included in the final report with thumbnails
+- Support for both primary (PyMuPDF) and fallback (PyPDF2) extraction methods
+
+### Improved Report Generation
+- Enhanced LLM prompting for better report structure and content
+- Reports now include executive summary, metrics analysis, method comparison, and critical analysis
+- Final reports are saved to session-specific directories for easy access
+
 ## Setup and Installation
 
 **Prerequisites:**
@@ -104,7 +129,7 @@ graph TD
     ```bash
     poetry install
     ```
-    This will also install `pdfplumber` for enhanced PDF table detection.
+    This will also install `pdfplumber` for enhanced PDF table detection and `PyMuPDF` for image extraction.
 
 ## Running the System
 
@@ -115,7 +140,7 @@ Running the platform involves three main steps: starting the orchestrator, spawn
 The orchestrator is the central nervous system. It manages the agent lifecycle, runs the task scheduler, and exposes the management API. The first time it runs, it will also create all the necessary database tables.
 
 ```bash
-poetry run python app/orchestrator/orchestrator.py
+uv run python app/orchestrator/orchestrator.py
 ```
 You should see output indicating the server has started, and the management API is available at `http://localhost:8000`. Keep this terminal window running.
 
@@ -128,14 +153,14 @@ This command spawns one of each type of agent required for the pipeline.
 
 ```bash
 # Spawn the essential agents
-poetry run python scripts/manage_swarm.py add --agent-class FetcherAgent
-poetry run python scripts/manage_swarm.py add --agent-class ReaderAgent
-poetry run python scripts/manage_swarm.py add --agent-class PreFilterAgent
-poetry run python scripts/manage_swarm.py add --agent-class MetricianAgent
-poetry run python scripts/manage_swarm.py add --agent-class AnalystAgent
-poetry run python scripts/manage_swarm.py add --agent-class DebaterAgent
-poetry run python scripts/manage_swarm.py add --agent-class SynthesiserAgent
-poetry run python scripts/manage_swarm.py add --agent-class ReviewerAgent
+uv run python scripts/manage_swarm.py add --agent-class FetcherAgent
+uv run python scripts/manage_swarm.py add --agent-class ReaderAgent
+uv run python scripts/manage_swarm.py add --agent-class PreFilterAgent
+uv run python scripts/manage_swarm.py add --agent-class MetricianAgent
+uv run python scripts/manage_swarm.py add --agent-class AnalystAgent
+uv run python scripts/manage_swarm.py add --agent-class DebaterAgent
+uv run python scripts/manage_swarm.py add --agent-class SynthesiserAgent
+uv run python scripts/manage_swarm.py add --agent-class ReviewerAgent
 ```
 
 **Example B: Specialized Swarm**
@@ -143,15 +168,15 @@ This demonstrates how to create agents with custom configurations. Here, we crea
 
 ```bash
 # Add an "optimist" debater
-poetry run python scripts/manage_swarm.py add --agent-class DebaterAgent --base-id optimist-deb --config '{"debate_strategy": "optimist_only"}'
+uv run python scripts/manage_swarm.py add --agent-class DebaterAgent --base-id optimist-deb --config '{"debate_strategy": "optimist_only"}'
 
 # Add a "skeptic" debater
-poetry run python scripts/manage_swarm.py add --agent-class DebaterAgent --base-id skeptic-deb --config '{"debate_strategy": "skeptic_only"}'
+uv run python scripts/manage_swarm.py add --agent-class DebaterAgent --base-id skeptic-deb --config '{"debate_strategy": "skeptic_only"}'
 ```
 
 You can check that your agents are running with:
 ```bash
-poetry run python scripts/manage_swarm.py list
+uv run python scripts/manage_swarm.py list
 ```
 
 **Step 3: Submit an Initial Task**
@@ -159,7 +184,7 @@ poetry run python scripts/manage_swarm.py list
 Open a *third terminal window*. Use the `seed_task.py` script to give the swarm its first job.
 
 ```bash
-poetry run python scripts/seed_task.py "https://arxiv.org/pdf/2305.14314"
+uv run python scripts/seed_task.py "https://arxiv.org/pdf/2305.14314"
 ```
 This will insert a `Fetch_Paper` task into the database. The scheduler will pick it up and assign it to a `FetcherAgent`, kicking off the entire pipeline.
 

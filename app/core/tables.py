@@ -26,6 +26,8 @@ agents = Table(
     Column("last_heartbeat", DateTime(timezone=True), nullable=False, 
            server_default=func.now()),
     Column("status", String(20), nullable=False, server_default="active"),
+    Column("class_name", String(64), nullable=True),
+    Column("config", JSONB, nullable=True),
     Column("created_at", DateTime(timezone=True), nullable=False, 
            server_default=func.now()),
 )

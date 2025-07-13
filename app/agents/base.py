@@ -16,6 +16,8 @@ import inspect
 import logging
 import os
 import time
+import json
+from pathlib import Path
 from abc import ABC, abstractmethod
 from typing import Any, Awaitable, Callable, ClassVar, List, Optional
 from uuid import UUID
@@ -53,7 +55,25 @@ class BaseAgent(ABC):
         self.agent_id = agent_id
         self._inbox = inbox
         self._emit_task = emit_task
-        self._emit_karma = emit_karma
+
+        # Wrap emit_task to auto-fill session_id
+        async def _emit_task_with_session(task_obj):  # type: ignore[override]
+            if task_obj.session_id is None and getattr(self, "_current_task_id", None):
+                # Use current task's session_id if available
+                if hasattr(self, "_current_task_session") and self._current_task_session:
+                    task_obj.session_id = self._current_task_session
+            await emit_task(task_obj)
+
+        self._emit_task = _emit_task_with_session  # type: ignore[assignment]
+        # Wrap emit_karma to auto-fill task_id if omitted
+        self._emit_karma_raw = emit_karma  # keep original
+
+        async def _emit_karma_with_task(agent_id: str, delta: int, reason: str | None = None, task_id: str | None = None):  # type: ignore[override]
+            nonlocal self  # pylint: disable=undefined-loop-variable
+            task_id_param = task_id or (str(self._current_task_id) if getattr(self, "_current_task_id", None) else None)
+            await self._emit_karma_raw(agent_id, delta, reason=reason, task_id=task_id_param)  # type: ignore[arg-type]
+
+        self._emit_karma = _emit_karma_with_task  # type: ignore[assignment]
         self._mark_completed = mark_completed
         self._mark_failed = mark_failed
         self._agent_directory = agent_directory
@@ -79,10 +99,17 @@ class BaseAgent(ABC):
                     logger.warning(f"{self.agent_id} has no task types, won't register")
                 else:
                     logger.info(f"{self.agent_id} registering with task_types {task_types}")
-                    await self._agent_directory.register(self.agent_id, task_types)
+                    await self._agent_directory.register(
+                        self.agent_id,
+                        task_types,
+                        class_name=self.__class__.__name__,
+                        config=self.config,
+                    )
             
             while True:
                 task = await self._inbox.get()
+                self._current_task_id = task.id  # for linkage
+                self._current_task_session = task.session_id
                 
                 # If this agent is a reviewer, it follows a different logic and doesn't get reviewed.
                 if self.TASK_TYPES and "Review_Artifact" in self.TASK_TYPES:
@@ -94,6 +121,8 @@ class BaseAgent(ABC):
                 start_time = time.time()
                 try:
                     await self._handle(task)
+                    # Persist any artifacts to disk for easier inspection
+                    await self._save_artifacts_to_disk(task)
                     duration = time.time() - start_time
 
                     if task.status == TaskStatus.completed:
@@ -124,6 +153,9 @@ class BaseAgent(ABC):
                     logger.exception(f"{self.agent_id} failed to handle task {task.id}: {exc}")
                     await self._emit_karma(self.agent_id, -2, reason="unhandled_exception") # Harsher penalty
                     await self._mark_failed(task.id, self.agent_id)
+                finally:
+                    self._current_task_id = None
+                    self._current_task_session = None
         except asyncio.CancelledError:
             logger.info(f"Agent {self.agent_id} run_forever task cancelled.")
         finally:
@@ -176,3 +208,39 @@ class BaseAgent(ABC):
         except Exception as exc:  # pylint: disable=broad-except
             logger.error("Failed to auto-detect task types for %s: %s", self.agent_id, exc)
             return [] 
+
+    # ------------------------------------------------------------------
+    # Artifact persistence helper
+    # ------------------------------------------------------------------
+
+    async def _save_artifacts_to_disk(self, task: Task) -> None:
+        """Write task artifacts to data/results/ for offline viewing."""
+        if not task.artifacts:
+            return
+
+        # Folder grouping by session
+        base_dir = Path("data/results")
+        if task.session_id:
+            result_dir = base_dir / task.session_id
+        else:
+            result_dir = base_dir
+
+        result_dir.mkdir(parents=True, exist_ok=True)
+
+        for idx, art in enumerate(task.artifacts):
+            filename_safe_name = art.name.replace(" ", "_") if art.name else f"artifact_{idx}"
+            out_path = result_dir / f"{task.id}_{self.agent_id}_{filename_safe_name}.json"
+            try:
+                artefact_dict = art.model_dump(mode="json", exclude_none=True)
+                with out_path.open("w", encoding="utf-8") as fp:
+                    json.dump(artefact_dict, fp, indent=2)
+
+                # If this is a text artifact named *report* also write Markdown
+                if (
+                    art.name and "report" in art.name.lower() and
+                    art.parts and art.parts[0].type == "text"
+                ):
+                    md_path = out_path.with_suffix(".md")
+                    md_path.write_text(art.parts[0].text, encoding="utf-8")
+            except Exception as exc:  # pylint: disable=broad-except
+                logger.warning("Failed to save artifact %s: %s", out_path, exc) 

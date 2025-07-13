@@ -87,7 +87,12 @@ class Scheduler:
             if agent_id is None:
                 # No agent registered; requeue & sleep
                 logger.warning("No agent available for task_type %s, requeuing", task.task_type)
-                await self._queue.push(task)
+                # Dedup check: skip if task already exists
+                exists = await self._queue.task_exists(task.id)
+                if not exists:
+                    await self._queue.push(task)
+                else:
+                    logger.warning("Skipping duplicate task %s", task.id)
                 await asyncio.sleep(1)
                 continue
                 

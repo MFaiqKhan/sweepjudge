@@ -8,7 +8,10 @@ Outputs markdown artifact and emits Critique_Claim task.
 from __future__ import annotations
 
 import logging
+import os
 from typing import Any, List
+
+import openai
 
 from app.core import Artifact, Task, TaskStatus, TextPart
 from app.utils.compare_tools import metrics_to_markdown
@@ -59,8 +62,57 @@ class AnalystAgent(BaseAgent):
 
         await self._emit_karma(self.agent_id, +2, reason="compare-ok")
 
-        # Emit critique task with claim summarised from table (simple message)
-        follow_task = Task(task_type="Critique_Claim", payload={"claim": "See comparison table"})
+        # Use LLM to generate real claims from metrics table
+        try:
+            client = openai.AsyncAzureOpenAI(
+                azure_endpoint=os.getenv("AZURE_OPENAI_ENDPOINT"),
+                api_key=os.getenv("AZURE_OPENAI_API_KEY"),
+                api_version="2025-01-01-preview",
+            )
+            
+            prompt = f"""
+            Based on the following metrics table, generate 2-3 key claims about the research findings.
+            Each claim should be a specific, verifiable statement about performance or methodology.
+            Format as bullet points.
+            
+            {markdown}
+            """
+            
+            resp = await client.chat.completions.create(
+                model="gpt-4o-mini-2",
+                messages=[
+                    {"role": "system", "content": "You are an analyst. Extract key claims from research metrics."},
+                    {"role": "user", "content": prompt},
+                ],
+                max_tokens=150,
+                temperature=0.5,
+            )
+            
+            claims_text = resp.choices[0].message.content.strip()
+            # Process bullet points into a clean list
+            claims = [line.lstrip("-• ").strip() for line in claims_text.split("\n") if line.strip()]
+            logger.info(f"Generated {len(claims)} claims from metrics")
+        except Exception as exc:
+            logger.exception("Failed to generate claims with LLM: %s", exc)
+            # Fallback to basic claims if LLM fails
+            claims = ["The paper demonstrates improvements over baseline methods on key metrics."]
+
+        follow_payload: dict[str, Any] = {
+            "claims": claims,
+            "comparison": markdown,
+        }
+        if "summary" in task.payload:
+            follow_payload["summary"] = task.payload["summary"]
+        if "metrics" in task.payload:
+            follow_payload["metrics"] = task.payload["metrics"]
+        if "pdf_path" in task.payload:
+            follow_payload["pdf_path"] = task.payload["pdf_path"]
+
+        follow_task = Task(
+            task_type="Critique_Claim",
+            payload=follow_payload,
+            session_id=task.session_id,
+        )
         await self._emit_task(follow_task)
 
-        logger.info("%s produced comparison table", self.agent_id) 
+        logger.info("%s produced comparison table and %d claims", self.agent_id, len(claims)) 

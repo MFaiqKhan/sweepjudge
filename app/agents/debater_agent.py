@@ -1,6 +1,6 @@
 """DebaterAgent – generates pro/cons for a given claim.
 
-Input payload: {"claim": str}
+Input payload: {"claims": List[str]}
 Output: JSON with lists of pros, cons; karma; triggers Synthesise_Report.
 
 The agent internally spawns two calls to the LLM with different system
@@ -53,8 +53,8 @@ class DebaterAgent(BaseAgent):
     async def _handle(self, task: Task) -> None:  # noqa: D401
         if task.task_type != "Critique_Claim":
             return
-        claim: str | None = task.payload.get("claim")
-        if not claim:
+        claims: List[str] = task.payload.get("claims", [])
+        if not claims:
             await self._emit_karma(self.agent_id, -1, reason="no-claim")
             return
 
@@ -69,10 +69,22 @@ class DebaterAgent(BaseAgent):
         strategy = self.config.get("debate_strategy", "balanced")
         logger.info(f"Debater {self.agent_id} using strategy: {strategy}")
 
-        pros, cons = await self._generate_pro_con(client, claim, strategy)
-        critique = {"pros": pros, "cons": cons, "claim": claim}
+        critiques: List[Dict[str, Any]] = []
+        for cl in claims:
+            try:
+                pros, cons = await self._generate_pro_con(client, cl, strategy)
+                critiques.append({"claim": cl, "pros": pros, "cons": cons})
+                logger.info(f"Generated critique for claim: {cl[:30]}...")
+            except Exception as exc:
+                logger.exception(f"Failed to critique claim: {exc}")
+                # Add a basic critique as fallback
+                critiques.append({
+                    "claim": cl,
+                    "pros": ["The claim appears to be supported by the metrics"],
+                    "cons": ["More evidence may be needed to fully validate this claim"]
+                })
 
-        part = DataPart(data=critique)  # type: ignore[arg-type]
+        part = DataPart(data=critiques)  # type: ignore[arg-type]
         artifact = Artifact(name="critique", parts=[part])
         task.status = TaskStatus.completed
         task.artifacts = [artifact]
@@ -80,10 +92,20 @@ class DebaterAgent(BaseAgent):
         await self._emit_karma(self.agent_id, +2, reason="critique-done")
 
         # Final synthesis stage
-        follow_task = Task(task_type="Synthesise_Report", payload={})
+        follow_payload: Dict[str, Any] = {
+            "critiques": critiques,
+        }
+        
+        # Forward all relevant data from previous stages
+        keys_to_forward = ["summary", "metrics", "comparison", "claims", "pdf_path"]
+        for key in keys_to_forward:
+            if key in task.payload:
+                follow_payload[key] = task.payload[key]
+
+        follow_task = Task(task_type="Synthesise_Report", payload=follow_payload, session_id=task.session_id)
         await self._emit_task(follow_task)
 
-        logger.info("%s critiqued claim", self.agent_id)
+        logger.info("%s critiqued %d claims", self.agent_id, len(critiques))
 
     async def _generate_pro_con(
         self, client: openai.AsyncClient, claim: str, strategy: str

@@ -26,13 +26,19 @@ class MetricianAgent(BaseAgent):
         if task.task_type != "Extract_Metrics":
             return
 
+        pdf_path_str: str | None = None
+
         # Branch 1: we already have pre-filtered text snippet
         if "text_snippet" in task.payload:
             text = task.payload["text_snippet"]
-            logger.info("Metrician %s received pre-filtered snippet (%d chars)", self.agent_id, len(text))
+            logger.info(
+                "Metrician %s received pre-filtered snippet (%d chars)",
+                self.agent_id,
+                len(text),
+            )
         else:
             # Fallback: read full PDF
-            pdf_path_str: str | None = task.payload.get("pdf_path")
+            pdf_path_str = task.payload.get("pdf_path")
             if not pdf_path_str or not Path(pdf_path_str).exists():
                 await self._emit_karma(self.agent_id, -1, reason="pdf-missing")
                 logger.error(f"PDF not found at path: {pdf_path_str}")
@@ -74,11 +80,48 @@ class MetricianAgent(BaseAgent):
         karma_delta = 2 if metrics_json else -1
         await self._emit_karma(self.agent_id, karma_delta, reason="metrics-parsed")
 
-        # Emit follow-up compare task, passing metrics so analyst can aggregate
-        follow_task = Task(task_type="Compare_Methods", payload={"metrics": metrics_json})
-        await self._emit_task(follow_task)
+        # Forward metrics for downstream agents
+        follow_payload: dict[str, Any] = {
+            "metrics": metrics_json,
+        }
+        if "summary" in task.payload:
+            follow_payload["summary"] = task.payload["summary"]
+        if pdf_path_str:
+            follow_payload["pdf_path"] = pdf_path_str
+            
+        src_desc = pdf_path_str if pdf_path_str else "snippet"
 
-        logger.info("%s extracted %d metrics from %s", self.agent_id, len(metrics_json), pdf_path_str)
+        # Create a follow-up task with a deterministic ID based on the session
+        # This helps prevent duplicate tasks when multiple agents emit similar tasks
+        import hashlib
+        import uuid
+        
+        # Create a deterministic task ID based on session and task type
+        task_id_seed = f"{task.session_id}_Compare_Methods" if task.session_id else f"Compare_Methods_{pdf_path_str}"
+        task_id_hash = hashlib.md5(task_id_seed.encode()).hexdigest()
+        task_id = uuid.UUID(task_id_hash[:32])
+        
+        # Check if this task already exists to prevent duplicates
+        task_exists = False
+        if self._task_queue:
+            try:
+                task_exists = await self._task_queue.task_exists(task_id)
+            except Exception as exc:
+                logger.warning(f"Failed to check if task exists: {exc}")
+        
+        if not task_exists:
+            follow_task = Task(
+                id=task_id,
+                task_type="Compare_Methods", 
+                payload=follow_payload, 
+                session_id=task.session_id
+            )
+            await self._emit_task(follow_task)
+            logger.info("%s extracted %d metrics from %s and emitted Compare_Methods task", 
+                      self.agent_id, len(metrics_json), src_desc)
+        else:
+            logger.info("%s extracted %d metrics from %s but Compare_Methods task already exists", 
+                      self.agent_id, len(metrics_json), src_desc)
 
     def _extract_text(self, pdf_path: Path) -> str:
         """Extract text from PDF with better error handling and page tracking."""

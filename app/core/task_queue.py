@@ -15,7 +15,8 @@ import os
 import uuid
 from typing import Any, Dict, List, Optional
 
-from sqlalchemy import and_, delete, func, insert, select, text, update
+from sqlalchemy import and_, delete, func, select, text, update
+from sqlalchemy.dialects.postgresql import insert as pg_insert
 from sqlalchemy.ext.asyncio import AsyncConnection, AsyncEngine, create_async_engine
 # (Error , commented and not deleted just for reference) from sqlalchemy.ext.asyncio.connection import AsyncConnection There is no connection sub-package. AsyncConnection already comes from sqlalchemy.ext.asyncio.
 from sqlalchemy.pool import NullPool  # Correct import path for NullPool
@@ -24,6 +25,27 @@ from app.core.models import DBTaskStatus, Task, TaskRecord
 from app.core.tables import schema_creation_sql, tasks, agents
 
 logger = logging.getLogger(__name__)
+
+
+# ---------------------------------------------------------------------------
+# Helpers
+# ---------------------------------------------------------------------------
+
+
+def _make_json_serializable(obj: Any) -> Any:  # pylint: disable=too-complex
+    """Recursively convert non-JSON-serialisable values (e.g. UUID) to str.
+
+    This ensures payloads containing UUIDs can be stored in a JSONB column
+    without raising `TypeError: Object of type UUID is not JSON serializable`.
+    """
+
+    if isinstance(obj, uuid.UUID):
+        return str(obj)
+    if isinstance(obj, (list, tuple)):
+        return [_make_json_serializable(i) for i in obj]
+    if isinstance(obj, dict):
+        return {k: _make_json_serializable(v) for k, v in obj.items()}
+    return obj
 
 # How often to check for and retry stuck tasks (seconds)
 TASK_RETRY_INTERVAL = int(os.getenv("TASK_RETRY_SEC", "60"))
@@ -65,8 +87,11 @@ class TaskQueue:
         # Create engine with PgBouncer compatibility settings
         engine_kwargs = {
             "echo": False,
-            "connect_args": {"prepare_threshold": 0},
-            "poolclass": NullPool,
+            "connect_args": {
+                # PgBouncer / Supabase friendly:
+                "prepare_threshold": None,     # (harmless but asyncpg-specific)
+            },
+            "poolclass": NullPool,          # still fine
         }
         
         engine = create_async_engine(db_url, **engine_kwargs)
@@ -130,21 +155,32 @@ class TaskQueue:
         task_record = TaskRecord(
             id=task.id,
             task_type=task.task_type,
-            payload=task.payload,
+            payload=_make_json_serializable(task.payload),
             status=DBTaskStatus.queued,
             session_id=task.session_id,
         )
         
         async with self._engine.begin() as conn:
-            await conn.execute(
-                insert(tasks).values(
+            stmt = (
+                pg_insert(tasks)
+                .values(
                     id=task_record.id,
                     task_type=task_record.task_type,
                     payload=task_record.payload,
                     status=task_record.status.value,
                     session_id=task_record.session_id,
                 )
+                .on_conflict_do_update(
+                    index_elements=[tasks.c.id],
+                    set_=dict(
+                        status=DBTaskStatus.queued.value,
+                        payload=task_record.payload,
+                        updated_at=dt.datetime.utcnow(),
+                        agent_id=None,
+                    ),
+                )
             )
+            await conn.execute(stmt)
             
         # The trigger will call pg_notify, and our listener will set this event
         logger.debug("Task %s pushed to queue", task.id)
@@ -210,6 +246,23 @@ class TaskQueue:
     async def mark_failed(self, task_id: uuid.UUID, agent_id: str) -> None:
         """Mark a task as failed."""
         await self._update_task_status(task_id, DBTaskStatus.failed, agent_id)
+
+    async def task_exists(self, task_id: uuid.UUID) -> bool:
+        """Check if a task with the given ID exists in the queue.
+        
+        Args:
+            task_id: The UUID of the task to check
+            
+        Returns:
+            True if the task exists, False otherwise
+        """
+        async with self._engine.connect() as conn:
+            result = await conn.execute(
+                select(tasks.c.id)
+                .where(tasks.c.id == task_id)
+                .limit(1)
+            )
+            return result.first() is not None
     
     # ------------------------------------------------------------------
     # Internal helpers

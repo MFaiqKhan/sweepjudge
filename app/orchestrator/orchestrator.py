@@ -9,8 +9,20 @@ from __future__ import annotations
 
 import asyncio
 import logging
+import os
 from typing import Dict, Any, Optional
 import uuid
+
+# Load environment variables from .env so DATABASE_URL is available before
+# any engine is created.
+from dotenv import load_dotenv
+
+load_dotenv()
+
+# psycopg (async) cannot work with the default ProactorEventLoop on Windows.
+# Switch to WindowsSelectorEventLoopPolicy early if running on Windows.
+if os.name == "nt" and hasattr(asyncio, "WindowsSelectorEventLoopPolicy"):
+    asyncio.set_event_loop_policy(asyncio.WindowsSelectorEventLoopPolicy())
 
 from fastapi import FastAPI, HTTPException
 from pydantic import BaseModel
@@ -109,6 +121,80 @@ class OrchestratorRuntime:
                 ]
             }
 
+        # ------------------------------------------------------------------
+        # DB-backed view – includes agents from previous runs until stale-age
+        # ------------------------------------------------------------------
+
+        @self._api_app.get("/agents/db")
+        async def list_agents_db():
+            """Return active agents according to the AgentDirectory table.
+
+            An agent is *active* if its `status` is 'active' and the last
+            heartbeat is within `STALE_AGENT_THRESHOLD` seconds.
+            """
+
+            rows = await self._agent_directory.list_active()
+
+            return {
+                "agents": rows  # already dict-ified in helper
+            }
+
+        # ------------------------------------------------------------------
+        # Simple report retrieval
+        # ------------------------------------------------------------------
+
+        @self._api_app.get("/reports/{task_id}")
+        async def get_report(task_id: str):
+            """Return the markdown version of the final report if saved on disk."""
+            import glob
+            from pathlib import Path
+
+            result_dir = Path("data/results")
+            pattern = str(result_dir / f"**/{task_id}_*_report.md")
+            matches = glob.glob(pattern, recursive=True)
+            if not matches:
+                raise HTTPException(status_code=404, detail="Report not found")
+
+            report_path = Path(matches[0])
+            return {"task_id": task_id, "content": report_path.read_text(encoding="utf-8")}
+
+    # ------------------------------------------------------------------
+    # Startup reconciliation: DB vs in-memory
+    # ------------------------------------------------------------------
+
+    async def _reconcile_agents_from_db(self):
+        """Ensure DB does not claim agents are alive when they are not.
+
+        After an orchestrator crash/restart, the `agents` table may still
+        list rows with status = 'active' even though no agent coroutine is
+        running.  We mark those rows inactive so that API consumers and the
+        scheduler immediately see a consistent view.
+        """
+
+        try:
+            rows = await self._agent_directory.list_respawn_candidates()
+        except Exception as exc:  # pylint: disable=broad-except
+            logger.exception("Failed to reconcile agents from DB: %s", exc)
+            return
+
+        if not rows:
+            return
+
+        logger.info("Respawning %d persisted agents from previous run", len(rows))
+
+        for row in rows:
+            aid = row["id"]
+            class_name = row.get("class_name")
+            if not class_name:
+                logger.warning("Agent %s has no stored class_name – skipping respawn", aid)
+                continue
+
+            config = row.get("config")
+            try:
+                await self.spawn_agent(class_name, aid, config)
+            except Exception as exc:  # pylint: disable=broad-except
+                logger.exception("Failed to respawn agent %s (%s): %s", aid, class_name, exc)
+
     async def spawn_agent(self, agent_class_name: str, agent_id: str, config: Optional[Dict[str, Any]] = None):
         if agent_id in self._agents:
             raise ValueError(f"Agent with id '{agent_id}' already exists.")
@@ -157,7 +243,10 @@ class OrchestratorRuntime:
         del self._agent_tasks[agent_id]
         del self._agents[agent_id]
         del self._agent_inboxes[agent_id]
-        
+
+        # Mark as permanently removed so it won't be auto-respawned
+        await self._agent_directory.unregister(agent_id, permanent=True)
+
     # ------------------------------------------------------------------
     # Hooks passed to agents (no changes needed here)
     # ------------------------------------------------------------------
@@ -165,8 +254,8 @@ class OrchestratorRuntime:
     async def enqueue_task(self, task: Task) -> None:
         await self._task_queue.push(task)
 
-    async def add_karma(self, agent_id: str, delta: int, reason: str | None = None) -> None:
-        await self._ledger.add_delta(agent_id, delta, reason=reason)
+    async def add_karma(self, agent_id: str, delta: int, reason: str | None = None, task_id: str | None = None) -> None:
+        await self._ledger.add_delta(agent_id, delta, reason=reason, task_id=task_id)
 
     async def mark_task_completed(self, task_id: uuid.UUID, agent_id: str) -> None:
         await self._task_queue.mark_completed(task_id, agent_id)
@@ -193,6 +282,9 @@ class OrchestratorRuntime:
         await self._ledger.create_schema()
         await self._agent_directory.create_schema()
         await self._task_queue.create_schema()
+
+        # Reconcile any stale 'active' agents from a previous orchestrator run
+        await self._reconcile_agents_from_db()
         
         self._scheduler = Scheduler(
             karma=self._ledger,

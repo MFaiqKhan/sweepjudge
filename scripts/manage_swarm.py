@@ -71,23 +71,38 @@ def remove(agent_id: str = typer.Argument(..., help="The full ID of the agent to
         print(f"  ❌ Request failed: Could not connect to orchestrator at {ORCHESTRATOR_URL}.")
 
 @app.command(name="list")
-def list_agents():
-    """List all active agents in the swarm."""
-    print("Fetching active agents...")
+def list_agents(
+    source: str = typer.Option(
+        "db",
+        "--source",
+        help="Where to read agents from: 'runtime' (in-memory) or 'db' (AgentDirectory).",
+        show_default=True,
+    )
+):
+    """List active agents.
+
+    By default queries the DB-backed view so results survive orchestrator restarts.
+    """
+
+    endpoint = "/agents/" if source == "runtime" else "/agents/db"
+    print(f"Fetching active agents from {source}…")
+
     try:
         with httpx.Client() as client:
-            response = client.get(f"{ORCHESTRATOR_URL}/agents/")
+            response = client.get(f"{ORCHESTRATOR_URL}{endpoint}")
         response.raise_for_status()
-        
+
         data = response.json()
         if not data.get("agents"):
             print("No active agents found.")
             return
-            
+
         print(json.dumps(data, indent=2))
-        
-    except httpx.RequestError as e:
-        print(f"❌ Request failed: Could not connect to orchestrator at {ORCHESTRATOR_URL}.")
+
+    except httpx.RequestError:
+        print(
+            f"❌ Request failed: Could not connect to orchestrator at {ORCHESTRATOR_URL}. Is it running?"
+        )
 
 if __name__ == "__main__":
     app() 

@@ -13,7 +13,7 @@ import datetime as _dt
 import os
 from typing import Optional
 
-from sqlalchemy import BigInteger, Column, DateTime, Integer, MetaData, String, Table, text
+from sqlalchemy import BigInteger, Column, DateTime, Integer, MetaData, String, Table, text, Text
 from sqlalchemy.ext.asyncio import AsyncEngine, AsyncSession, async_sessionmaker, create_async_engine
 from sqlalchemy.sql import select
 from sqlalchemy.pool import NullPool
@@ -31,7 +31,7 @@ class _Tables:
         Column("id", BigInteger, primary_key=True, autoincrement=True),
         Column("agent_id", String(64), nullable=False, index=True),
         Column("delta", Integer, nullable=False),
-        Column("reason", String(255), nullable=True),
+        Column("reason", Text, nullable=True),
         Column("task_id", String(128), nullable=True),
         Column(
             "created_at",
@@ -68,7 +68,9 @@ class KarmaLedger:
         # Create engine with PgBouncer compatibility settings
         engine_kwargs = {
             "echo": False,
-            "connect_args": {"prepare_threshold": 0},
+            "connect_args": {
+                "prepare_threshold": None,
+            },
             "poolclass": NullPool,
         }
         
@@ -80,6 +82,16 @@ class KarmaLedger:
 
         async with self._engine.begin() as conn:
             await conn.run_sync(_Tables.metadata.create_all)
+
+            # Ensure reason column is large enough; migrate to text if still varchar
+            await conn.execute(
+                text(
+                    """
+                    ALTER TABLE karma_events
+                    ALTER COLUMN reason TYPE text USING reason::text;
+                    """
+                )
+            )
 
     # ------------------------------------------------------------------
     # Public methods
